@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spelling Bee 終極特訓</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="bg-shape shape1"></div>
+    <div class="bg-shape shape2"></div>
+
+    <div class="app-container">
+        <!-- 首頁 (Home Screen) -->
+        <div id="home-screen" class="screen active">
+            <h1 class="main-title">🐝 Spelling Bee<br><span class="highlight">特訓班</span></h1>
+            
+            <button onclick="openMistakeBank()" class="btn btn-danger btn-large" style="margin-bottom: 25px; box-shadow: 0 0 20px rgba(244, 63, 94, 0.4);">
+                <span style="font-size: 20px;">📓 進入錯題本</span>
+            </button>
+            
+            <div class="progress-section">
+                <div class="progress-info">
+                    <span>總進度</span>
+                    <span id="progress-text">已掌握 0 / 100 單字</span>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-bar" id="overall-progress"></div>
+                </div>
+            </div>
+
+            <div class="level-grid" id="level-grid"></div>
+        </div>
+
+        <!-- 關卡畫面 (Level Screen) -->
+        <div id="level-screen" class="screen">
+            <button class="back-btn" onclick="goHome()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                回首頁
+            </button>
+            <h2 id="level-title" class="level-title">Level 1</h2>
+            
+            <div class="story-controls">
+                <button onclick="playFullStory()" class="btn btn-nav" id="btn-story-audio">🔊 朗讀故事</button>
+                <button onclick="toggleStorySpeed()" class="btn btn-nav" id="btn-story-speed">速度：正常</button>
+            </div>
+            
+            <div class="story-box" id="story-box">
+                <!-- Story will be injected here with clickable sentences -->
+            </div>
+
+            <div class="mode-selection">
+                <button onclick="startStudy()" class="btn btn-primary btn-large">
+                    <span class="icon">📖</span> 單字學習模式
+                </button>
+                <div class="quiz-btn-group">
+                    <button onclick="startQuiz('typing')" class="btn btn-danger btn-large">⌨️ 測驗(打字)</button>
+                    <button onclick="startQuiz('paper')" class="btn btn-danger btn-large">📝 測驗(紙筆)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 錯題本畫面 (Mistake Bank Screen) -->
+        <div id="mistake-screen" class="screen">
+            <div class="study-header">
+                <button class="back-btn" onclick="goHome()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                    回首頁
+                </button>
+                <h3 style="color: white; margin: 0; text-shadow: 0 0 10px rgba(244, 63, 94, 0.5);">📓 我的錯題本</h3>
+            </div>
+            
+            <div class="mode-selection" style="margin-bottom: 20px;">
+                <div class="quiz-btn-group">
+                    <button onclick="startMistakeQuiz('typing')" class="btn btn-danger">⌨️ 錯題測驗(打字)</button>
+                    <button onclick="startMistakeQuiz('paper')" class="btn btn-danger">📝 錯題測驗(紙筆)</button>
+                </div>
+            </div>
+
+            <div class="study-list" id="mistake-list">
+                <!-- Mistake words injected here -->
+            </div>
+        </div>
+
+        <!-- 學習模式畫面 (List View) -->
+        <div id="study-screen" class="screen">
+            <div class="study-header">
+                <button class="back-btn" onclick="showLevel(currentLevelIndex)">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                    返回
+                </button>
+                <h3 style="color: white; margin: 0; text-shadow: 0 0 10px rgba(56, 189, 248, 0.5);">Level <span id="study-level-num"></span></h3>
+            </div>
+            
+            <div class="study-list" id="study-list">
+                <!-- List of words injected here -->
+            </div>
+        </div>
+
+        <!-- 測驗模式畫面 (Quiz Screen) -->
+        <div id="quiz-screen" class="screen">
+            <div class="study-header">
+                <button class="back-btn" onclick="abortQuiz()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                    放棄測驗
+                </button>
+                <div class="word-counter">
+                    <span id="quiz-counter">1 / 10</span>
+                </div>
+            </div>
+
+            <div class="quiz-container">
+                <button class="huge-audio-btn" onclick="playQuizAudio()">
+                    🔊 <br>聽發音
+                </button>
+                
+                <!-- Typing Mode Input -->
+                <div class="input-group" id="quiz-typing-area">
+                    <p class="hint">請拼出聽到的單字：</p>
+                    <input type="text" id="quiz-input" autocomplete="off" spellcheck="false" placeholder="在此輸入拼字..." onkeypress="handleQuizKey(event)">
+                    <button onclick="checkQuizTyping()" class="btn btn-primary btn-submit mt-3">送出答案</button>
+                </div>
+
+                <!-- Paper Mode Controls -->
+                <div class="input-group" id="quiz-paper-area" style="display: none; width: 100%;">
+                    <p class="hint">請在紙上寫下單字後，點擊下方按鈕對答案</p>
+                    <button onclick="showPaperAnswer()" class="btn btn-primary btn-submit" style="width: 100%;">顯示答案</button>
+                    
+                    <div id="paper-answer-box" style="display: none; margin-top: 20px; width: 100%;">
+                        <div id="paper-study-card-container"></div>
+                        <p class="hint mt-3" style="font-weight: bold; color: white;">你寫對了嗎？</p>
+                        <div style="display: flex; gap: 15px; margin-top: 15px;">
+                            <button onclick="submitPaperQuiz(true)" class="btn btn-success" style="flex:1;">✔️ 我寫對了</button>
+                            <button onclick="submitPaperQuiz(false)" class="btn btn-danger" style="flex:1;">❌ 我寫錯了</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 動漫回饋 Overlay -->
+        <div id="feedback-overlay" class="overlay">
+            <div class="feedback-card" id="feedback-card" style="max-width: 500px; width: 95%;">
+                <div class="feedback-icon" id="feedback-icon">🎉</div>
+                <h2 id="feedback-title">正確！</h2>
+                <div class="anime-quote-box">
+                    <p class="feedback-text" id="feedback-text">「我要成為海賊王！」</p>
+                    <p class="feedback-char" id="feedback-char">— 魯夫 (海賊王)</p>
+                </div>
+                <div class="correct-word-hint" id="correct-word-hint" style="display: none; text-align: left;">
+                    <div style="text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 18px;">正確答案：</div>
+                    <div id="feedback-study-card-container"></div>
+                </div>
+                <button onclick="nextQuiz()" class="btn btn-primary mt-3" id="feedback-next-btn" style="width: 100%;">下一題 ➡</button>
+            </div>
+        </div>
+        
+        <canvas id="confetti"></canvas>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
