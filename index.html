@@ -11,9 +11,47 @@
     <div class="bg-shape shape1"></div>
     <div class="bg-shape shape2"></div>
 
+    <!-- 全站常駐頂部控制列 (每個頁面皆可調字級、切換使用者與查看雲端同步) -->
+    <header class="global-topbar">
+        <div class="topbar-inner">
+            <button type="button" class="topbar-brand" onclick="goHome()" title="回首頁">
+                <span class="brand-bee">🐝</span>
+                <span class="brand-title">Spelling Bee</span>
+            </button>
+
+            <div class="topbar-controls">
+                <!-- 5 段字體大小切換器 (預設 1 最小) -->
+                <div class="font-scale-control" role="group" aria-label="字體大小調整 (5段)">
+                    <span class="fs-label">字級</span>
+                    <button type="button" class="fs-btn active" data-fs-level="1" onclick="setFontScale(1)">1</button>
+                    <button type="button" class="fs-btn" data-fs-level="2" onclick="setFontScale(2)">2</button>
+                    <button type="button" class="fs-btn" data-fs-level="3" onclick="setFontScale(3)">3</button>
+                    <button type="button" class="fs-btn" data-fs-level="4" onclick="setFontScale(4)">4</button>
+                    <button type="button" class="fs-btn" data-fs-level="5" onclick="setFontScale(5)">5</button>
+                </div>
+
+                <!-- 雲端同步狀態與手動同步鈕 -->
+                <button type="button" class="cloud-status-btn" id="btn-cloud-status" onclick="syncFromCloud(currentUser, true)" title="點擊立即與 Firebase 雲端同步">
+                    <span class="cloud-dot" id="cloud-status-dot"></span>
+                    <span id="cloud-status-text">雲端</span>
+                </button>
+
+                <!-- 使用者快速切換按鈕 -->
+                <button type="button" class="nav-user-btn" id="btn-nav-user" onclick="openUserModal()" title="切換使用人員 / 雲端設定">
+                    <span id="nav-user-icon">🦖</span>
+                    <span id="nav-user-name">Rex</span>
+                    <span class="caret">▾</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
     <div class="app-container">
         <!-- 首頁 (Home Screen) -->
         <div id="home-screen" class="screen active">
+            <!-- 首頁人員快速切換膠囊列 -->
+            <section class="user-switcher-bar" id="home-user-bar"></section>
+
             <h1 class="main-title">🐝 Spelling Bee<br><span class="highlight">特訓班</span></h1>
             
             <button onclick="openMistakeBank()" class="btn btn-danger btn-large" style="margin-bottom: 25px; box-shadow: 0 0 20px rgba(244, 63, 94, 0.4);">
@@ -29,6 +67,32 @@
                     <div class="progress-bar" id="overall-progress"></div>
                 </div>
             </div>
+
+            <!-- 首頁 1~100 題單字答對/答錯累積熱力表 -->
+            <section class="heatmap-panel" id="home-heatmap-panel">
+                <div class="heatmap-header">
+                    <div class="heatmap-legend">
+                        <span class="leg-item"><i class="leg-dot ok"></i>綠小字=答對次數</span>
+                        <span class="leg-item"><i class="leg-dot bad"></i>紅小字=答錯次數</span>
+                        <span class="leg-item"><i class="leg-dot shade"></i>底色依(錯−對)變色 · 點題號直接測驗</span>
+                    </div>
+                </div>
+
+                <div class="heatmap-toolbar">
+                    <div class="sort-btn-group" role="group" aria-label="題號表排序方式">
+                        <button type="button" class="hm-tool-btn active" data-hm-sort="id" onclick="setHeatmapSort('id')">🔢 題號順序</button>
+                        <button type="button" class="hm-tool-btn" data-hm-sort="net" onclick="setHeatmapSort('net')">⚖️ 錯−對排序</button>
+                        <button type="button" class="hm-tool-btn" data-hm-sort="err" onclick="setHeatmapSort('err')">🔥 僅看答錯數</button>
+                    </div>
+                    <button type="button" class="hm-tool-btn peek-btn" id="btn-home-peek-word" onclick="togglePeekWords()">
+                        👀 偷看單字
+                    </button>
+                </div>
+
+                <div class="drawer-q-grid" id="home-heatmap-grid">
+                    <!-- 1~100 word badges injected here -->
+                </div>
+            </section>
 
             <div class="level-grid" id="level-grid"></div>
         </div>
@@ -100,17 +164,63 @@
 
         <!-- 測驗模式畫面 (Quiz Screen) -->
         <div id="quiz-screen" class="screen">
-            <div class="study-header">
-                <button class="back-btn" onclick="abortQuiz()">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-                    放棄測驗
-                </button>
-                <div class="word-counter">
-                    <span id="quiz-counter">1 / 10</span>
+            <!-- 測驗頂部導覽列 (比照附圖：返回 + 模式/台詞開關 + 上一題 / 題號表開關 / 下一題) -->
+            <div class="quiz-topbar">
+                <div class="quiz-nav-left">
+                    <button type="button" class="quiz-pill-btn back-pill" onclick="abortQuiz()">
+                        ← 返回
+                    </button>
+                    <button type="button" class="quiz-pill-btn mode-pill" id="btn-quiz-mode-toggle" onclick="toggleQuizMode()" title="點擊切換紙筆或打字測驗">
+                        📝 紙筆模式
+                    </button>
+                    <button type="button" class="quiz-pill-btn voice-pill" id="btn-quiz-anime-voice" onclick="toggleAnimeVoice()" title="切換是否朗讀動漫台詞 (預設不唸)">
+                        🔇 台詞靜音
+                    </button>
+                </div>
+
+                <div class="quiz-nav-right">
+                    <button type="button" class="quiz-nav-arrow" id="btn-quiz-prev" onclick="prevQuizWord()">
+                        ← 上一題
+                    </button>
+                    <button type="button" class="quiz-drawer-trigger" id="btn-quiz-drawer-toggle" onclick="toggleQuizDrawer()">
+                        <span>🔢 第 <span id="quiz-counter">1 / 10</span> 題</span>
+                        <span id="quiz-drawer-caret">▾</span>
+                    </button>
+                    <button type="button" class="quiz-nav-arrow" id="btn-quiz-next" onclick="nextQuizWord()">
+                        下一題 →
+                    </button>
                 </div>
             </div>
 
+            <!-- 測驗頁可展開/收合的題號累積表抽屜 -->
+            <section class="heatmap-panel quiz-drawer-panel" id="quiz-drawer-panel" style="display: none;">
+                <div class="heatmap-header">
+                    <div class="heatmap-legend">
+                        <span class="leg-item"><i class="leg-dot ok"></i>綠小字=答對次數</span>
+                        <span class="leg-item"><i class="leg-dot bad"></i>紅小字=答錯次數</span>
+                        <span class="leg-item"><i class="leg-dot shade"></i>底色依(錯−對)變色</span>
+                    </div>
+                    <button type="button" class="btn-close-drawer" onclick="toggleQuizDrawer(false)" title="收合題號表">✕</button>
+                </div>
+
+                <div class="heatmap-toolbar">
+                    <div class="sort-btn-group" role="group" aria-label="測驗題號表排序方式">
+                        <button type="button" class="hm-tool-btn active" data-hm-sort="id" onclick="setHeatmapSort('id', true)">🔢 題號順序</button>
+                        <button type="button" class="hm-tool-btn" data-hm-sort="net" onclick="setHeatmapSort('net', true)">⚖️ 錯−對排序</button>
+                        <button type="button" class="hm-tool-btn" data-hm-sort="err" onclick="setHeatmapSort('err', true)">🔥 僅看答錯數</button>
+                    </div>
+                    <button type="button" class="hm-tool-btn peek-btn" id="btn-quiz-peek-word" onclick="togglePeekWords()">
+                        👀 偷看單字
+                    </button>
+                </div>
+
+                <div class="drawer-q-grid" id="quiz-drawer-grid">
+                    <!-- Quiz words grid injected here -->
+                </div>
+            </section>
+
             <div class="quiz-container">
+                <div class="quiz-word-tag" id="quiz-word-id-badge">單字題號 #1</div>
                 <button class="huge-audio-btn" onclick="playQuizAudio()">
                     🔊 <br>聽發音
                 </button>
@@ -139,25 +249,45 @@
             </div>
         </div>
 
-        <!-- 動漫回饋 Overlay -->
+        <!-- 動漫回饋與單字拼讀 Overlay (無論答對或答錯皆顯示單字卡，按下一題才前進) -->
         <div id="feedback-overlay" class="overlay">
-            <div class="feedback-card" id="feedback-card" style="max-width: 500px; width: 95%;">
-                <div class="feedback-icon" id="feedback-icon">🎉</div>
-                <h2 id="feedback-title">正確！</h2>
+            <div class="feedback-card" id="feedback-card">
+                <div class="feedback-top-bar">
+                    <div class="feedback-title-group">
+                        <span class="feedback-icon" id="feedback-icon">🎉</span>
+                        <h2 id="feedback-title">正確！</h2>
+                    </div>
+                    <button type="button" class="quiz-pill-btn voice-pill off" id="btn-feedback-anime-voice" onclick="toggleAnimeVoice()" title="切換是否朗讀動漫台詞">
+                        🔇 台詞靜音
+                    </button>
+                </div>
+
+                <!-- 逐字母拼讀視覺列 (a - p - p - l - e 同步高亮) -->
+                <div class="spelling-sequence-box" id="feedback-spelling-box">
+                    <div class="spelling-letters-row" id="feedback-letters-row"></div>
+                    <button type="button" class="btn-replay-spell" id="btn-replay-spelling" onclick="replayCurrentSpelling()">
+                        🔤 重聽拼讀 (單字 ➔ 逐字拼 ➔ 單字)
+                    </button>
+                </div>
+
+                <!-- 完整單字記憶卡 (答對與答錯一律顯示加深印象) -->
+                <div class="correct-word-hint" id="correct-word-hint" style="text-align: left;">
+                    <div id="feedback-study-card-container"></div>
+                </div>
+
                 <div class="anime-quote-box">
                     <p class="feedback-text" id="feedback-text">「我要成為海賊王！」</p>
                     <p class="feedback-char" id="feedback-char">— 魯夫 (海賊王)</p>
                 </div>
-                <div class="correct-word-hint" id="correct-word-hint" style="display: none; text-align: left;">
-                    <div style="text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 18px;">正確答案：</div>
-                    <div id="feedback-study-card-container"></div>
-                </div>
+
                 <button onclick="nextQuiz()" class="btn btn-primary mt-3" id="feedback-next-btn" style="width: 100%;">下一題 ➡</button>
             </div>
         </div>
         
         <canvas id="confetti"></canvas>
     </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
     <script src="data.js"></script>
