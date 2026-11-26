@@ -27,10 +27,10 @@ const FONT_SCALES = {
 };
 
 // App State
-let currentUser = localStorage.getItem(ACTIVE_USER_KEY) || 'rex';
-let fontScaleLevel = parseInt(localStorage.getItem(FONT_SCALE_KEY) || '1', 10);
-let animeVoiceEnabled = JSON.parse(localStorage.getItem(ANIME_VOICE_KEY) || 'false'); // 預設 false (不唸卡通台詞)
-let cloudDbUrl = localStorage.getItem(CLOUD_SYNC_URL_KEY) || DEFAULT_FIREBASE_DB_URL;
+let currentUser = (typeof localStorage !== 'undefined' ? localStorage.getItem(ACTIVE_USER_KEY) : null) || 'rex';
+let fontScaleLevel = parseInt((typeof localStorage !== 'undefined' ? localStorage.getItem(FONT_SCALE_KEY) : null) || '1', 10);
+let animeVoiceEnabled = JSON.parse((typeof localStorage !== 'undefined' ? localStorage.getItem(ANIME_VOICE_KEY) : null) || 'false'); // 預設 false (不唸卡通台詞)
+let cloudDbUrl = (typeof localStorage !== 'undefined' ? localStorage.getItem(CLOUD_SYNC_URL_KEY) : null) || DEFAULT_FIREBASE_DB_URL;
 
 let currentLevelIndex = 0;
 let quizWords = [];
@@ -273,13 +273,29 @@ async function pushSlimLogToCloud(wordObj, isCorrect, mode, userInput = '', dura
     if (!wordObj) return;
     const wKey = wordObj.word.toLowerCase();
     const st = userProgress[wKey] || { correct: 0, incorrect: 0 };
-    const nowStr = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
+    const nowTs = Date.now();
+    const nowStr = (window.AIExportCore && typeof window.AIExportCore.formatTaipeiTime === 'function')
+        ? window.AIExportCore.formatTaipeiTime(nowTs)
+        : new Date(nowTs).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
+    const lvlObj = (typeof levels !== 'undefined' && Array.isArray(levels))
+        ? levels.find(l => Array.isArray(l.words) && l.words.some(x => x.id === wordObj.id || x.word === wordObj.word))
+        : null;
+    const unitLabel = wordObj.levelNum
+        ? `Level ${wordObj.levelNum}`
+        : (lvlObj ? `Level ${lvlObj.level}` : '');
 
     const entry = {
+        v: 2,
+        ts: nowTs,
         t: nowStr,
+        subj: 'g6_spelling',
         id: wordObj.id,
         word: wordObj.word,
         meaning: wordObj.meaning,
+        q: wordObj.meaning,
+        correct: wordObj.word,
+        unit: unitLabel,
+        cat: mode,
         mode: mode, // 'paper' | 'typing'
         ans: userInput || (isCorrect ? '紙筆答對' : '紙筆答錯'),
         res: isCorrect ? 'ok' : 'bad',
@@ -300,7 +316,7 @@ async function pushSlimLogToCloud(wordObj, isCorrect, mode, userInput = '', dura
     // 2. 背景直推 Firebase /g6_spelling_logs/{uid}
     if (!cloudDbUrl) return;
     const base = cloudDbUrl.replace(/\/+$/, '');
-    const logKey = `${Date.now()}_W${String(wordObj.id).padStart(3, '0')}`;
+    const logKey = `${nowTs}_W${String(wordObj.id).padStart(3, '0')}`;
     try {
         await fetch(`${base}/g6_spelling_logs/${currentUser}/${logKey}.json`, {
             method: 'PUT',
@@ -309,6 +325,59 @@ async function pushSlimLogToCloud(wordObj, isCorrect, mode, userInput = '', dura
         });
     } catch (e) {}
 }
+
+window.openAiExportModal = function() {
+    if (!window.AIExportCore || typeof window.AIExportCore.openExportModal !== 'function') {
+        showToast('⚠️ AI 匯出核心尚未載入，請重新整理頁面');
+        return;
+    }
+
+    const allWords = getAllWordsFlat();
+    const allQuestionsMap = {};
+    const errorBookIds = [];
+    const errorCounts = {};
+
+    allWords.forEach(w => {
+        const qId = String(w.id);
+        const st = userProgress[w.word.toLowerCase()] || { correct: 0, incorrect: 0 };
+        allQuestionsMap[qId] = {
+            id: qId,
+            unit: `Level ${w.levelNum} (${w.theme || ''})`,
+            cat: w.chunkType || 'spelling',
+            q: `請拼出「${w.meaning}」的英文單字${w.ipa ? ` ${w.ipa}` : ''}`,
+            opts: `音節切塊: ${(w.segments || []).join(' - ')}｜正解: ${w.word}`,
+            correct: w.word,
+            trap: w.uiNote || w.mnemonic || '',
+            concept: w.anchor ? `發音/字根錨點: ${w.anchor}` : (w.mnemonic || '')
+        };
+        if ((Number(st.incorrect) || 0) > 0) {
+            errorBookIds.push(qId);
+            errorCounts[qId] = Number(st.incorrect) || 0;
+        }
+    });
+
+    let localLogs = [];
+    try {
+        const raw = localStorage.getItem(getUserKey('recent_logs', currentUser)) || '[]';
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) localLogs = parsed;
+    } catch (e) {}
+
+    window.AIExportCore.openExportModal({
+        subjectKey: 'g6_spelling',
+        dbUrl: cloudDbUrl,
+        logsNode: 'g6_spelling_logs',
+        uid: currentUser,
+        user: getCurrentUserObj(),
+        supportsSlow: false,
+        allQuestionsMap,
+        errorBookIds,
+        errorCounts,
+        localLogs,
+        onToast: showToast,
+        downloadFilenamePrefix: 'SpellingBee_AI練習'
+    });
+};
 
 function getUserStatsSummary(uid) {
     const prog = loadUserProgress(uid);
@@ -849,30 +918,329 @@ function playSentence(index, text) {
 }
 
 // ================= STUDY MODE =================
+
+// ================= PHONICS & CHUNKING ENGINE (PHASE C) =================
+let currentChunkAudio = null;
+let blendingSequenceId = 0;
+let blendingTimer = null;
+let wordsCacheMap = null;
+
+const CHUNK_TYPE_LABELS = {
+    'onset-rime': '首音+韻基',
+    'compound': '複合字',
+    'morpheme': '詞素前後綴',
+    'syllable': '音節拆分'
+};
+
+function getChunkAudioKey(chunk) {
+    if (!chunk || !chunk.text) return '';
+    const cleanText = String(chunk.text).toLowerCase().trim();
+    const cleanIpa = String(chunk.ipa || '').replace(/^\/+|\/+$/g, '').trim();
+    return `${cleanText}|${cleanIpa}`;
+}
+
+function stopCurrentChunkAudio() {
+    if (currentChunkAudio) {
+        try {
+            currentChunkAudio.pause();
+            currentChunkAudio.currentTime = 0;
+            currentChunkAudio.onended = null;
+            currentChunkAudio.onerror = null;
+        } catch (e) {}
+        currentChunkAudio = null;
+    }
+}
+
+function getWordObjByText(wordText) {
+    if (!wordText) return null;
+    if (typeof wordText === 'object' && wordText.word) return wordText;
+    const target = String(wordText).toLowerCase().trim();
+    if (!wordsCacheMap) {
+        wordsCacheMap = new Map();
+        if (typeof getAllWordsFlat === 'function') {
+            const all = getAllWordsFlat();
+            all.forEach(w => {
+                if (w && w.word) wordsCacheMap.set(w.word.toLowerCase(), w);
+            });
+        }
+    }
+    return wordsCacheMap.get(target) || null;
+}
+
+function playChunkAudio(chunk, onEndedCallback) {
+    if (!chunk) {
+        if (typeof onEndedCallback === 'function') onEndedCallback();
+        return;
+    }
+
+    // 停止先前的 chunk 音訊
+    stopCurrentChunkAudio();
+
+    const key = getChunkAudioKey(chunk);
+    const audioMap = (typeof window !== 'undefined' && window.CHUNK_AUDIO_MAP)
+        ? window.CHUNK_AUDIO_MAP
+        : (typeof CHUNK_AUDIO_MAP !== 'undefined' ? CHUNK_AUDIO_MAP : {});
+    const audioPath = audioMap ? audioMap[key] : null;
+
+    let callbackFired = false;
+    const triggerCallback = () => {
+        if (!callbackFired) {
+            callbackFired = true;
+            if (typeof onEndedCallback === 'function') {
+                onEndedCallback();
+            }
+        }
+    };
+
+    // 自動平滑降級至 A軌 TTS
+    const fallbackToTTS = () => {
+        stopCurrentChunkAudio();
+
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+            try {
+                window.speechSynthesis.cancel();
+                const speakText = chunk.speakAs || chunk.text || '';
+                const u = new SpeechSynthesisUtterance(speakText);
+                u.lang = 'en-US';
+                u.rate = 0.85;
+                u.onend = () => triggerCallback();
+                u.onerror = () => triggerCallback();
+                window.speechSynthesis.speak(u);
+                return;
+            } catch (err) {
+                console.warn('[playChunkAudio] TTS fallback error:', err);
+                triggerCallback();
+                return;
+            }
+        }
+        triggerCallback();
+    };
+
+    if (audioPath && typeof Audio !== 'undefined') {
+        try {
+            const audio = new Audio(audioPath);
+            currentChunkAudio = audio;
+            audio.onended = () => {
+                if (currentChunkAudio === audio) {
+                    currentChunkAudio = null;
+                }
+                triggerCallback();
+            };
+            audio.onerror = (e) => {
+                console.warn(`[playChunkAudio] Audio load failed for key: "${key}" (${audioPath})`, e);
+                fallbackToTTS();
+            };
+            const playPromise = audio.play();
+            if (playPromise !== undefined) {
+                playPromise.catch((err) => {
+                    console.warn(`[playChunkAudio] Audio play() promise rejected for key: "${key}"`, err);
+                    fallbackToTTS();
+                });
+            }
+        } catch (err) {
+            console.warn(`[playChunkAudio] Audio instantiation failed for key: "${key}"`, err);
+            fallbackToTTS();
+        }
+    } else {
+        fallbackToTTS();
+    }
+}
+
+let activeBlendingChips = [];
+
+function stopBlending() {
+    blendingSequenceId++;
+    if (blendingTimer) {
+        clearTimeout(blendingTimer);
+        blendingTimer = null;
+    }
+    stopCurrentChunkAudio();
+    if (Array.isArray(activeBlendingChips)) {
+        activeBlendingChips.forEach(el => {
+            if (el && el.classList && typeof el.classList.remove === 'function') {
+                el.classList.remove('blending-active', 'blending-all-highlight');
+            }
+        });
+        activeBlendingChips = [];
+    }
+    if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
+        document.querySelectorAll('.blending-active, .blending-all-highlight').forEach(el => {
+            if (el && el.classList && typeof el.classList.remove === 'function') {
+                el.classList.remove('blending-active', 'blending-all-highlight');
+            }
+        });
+    }
+}
+
+function soundItOutBlending(wordObj, containerElement) {
+    if (typeof wordObj === 'string') {
+        wordObj = getWordObjByText(wordObj);
+    }
+    if (!wordObj || !Array.isArray(wordObj.chunks) || wordObj.chunks.length === 0) {
+        return;
+    }
+
+    // 1. 中止上一段連音佇列或雜音
+    stopBlending();
+    const seqId = ++blendingSequenceId;
+
+    // 2. 獲取對應的 chunk 按鈕群
+    let chips = [];
+    if (containerElement && typeof containerElement.querySelectorAll === 'function') {
+        chips = Array.from(containerElement.querySelectorAll('.chunk-chip'));
+    } else if (typeof document !== 'undefined') {
+        chips = Array.from(document.querySelectorAll(`.chunk-chip[data-word="${wordObj.word}"]`));
+    }
+
+    activeBlendingChips = chips;
+    // 清理殘留高亮
+    chips.forEach(c => c.classList.remove('blending-active', 'blending-all-highlight'));
+
+    let chunkIdx = 0;
+
+    function playNextStep() {
+        if (seqId !== blendingSequenceId) return;
+
+        if (chunkIdx < wordObj.chunks.length) {
+            const currentChunk = wordObj.chunks[chunkIdx];
+            const currentChip = chips[chunkIdx];
+
+            // 移除其他塊高亮，亮起當前分塊
+            chips.forEach(c => c.classList.remove('blending-active', 'blending-all-highlight'));
+            if (currentChip) {
+                currentChip.classList.add('blending-active');
+            }
+
+            playChunkAudio(currentChunk, () => {
+                if (seqId !== blendingSequenceId) return;
+
+                // 播畢後移除單塊高亮
+                if (currentChip) {
+                    currentChip.classList.remove('blending-active');
+                }
+
+                // 70ms 呼吸間隔
+                blendingTimer = setTimeout(() => {
+                    if (seqId !== blendingSequenceId) return;
+                    chunkIdx++;
+                    playNextStep();
+                }, 70);
+            });
+        } else {
+            // 全部分塊播畢，全體分塊同時亮起
+            chips.forEach(c => {
+                c.classList.remove('blending-active');
+                c.classList.add('blending-all-highlight');
+            });
+
+            // 停留 120ms 蓄力
+            blendingTimer = setTimeout(() => {
+                if (seqId !== blendingSequenceId) return;
+
+                // 唸出完整單字，結束後解除全體高亮
+                speakWord(wordObj.word, () => {
+                    if (seqId === blendingSequenceId) {
+                        chips.forEach(c => c.classList.remove('blending-all-highlight'));
+                    }
+                }, true);
+            }, 120);
+        }
+    }
+
+    playNextStep();
+}
+
+function onChunkChipClick(wordText, chunkIdx, chipElement) {
+    stopBlending();
+    const wordObj = getWordObjByText(wordText);
+    if (!wordObj || !Array.isArray(wordObj.chunks) || !wordObj.chunks[chunkIdx]) return;
+
+    if (chipElement) {
+        if (typeof document !== 'undefined') {
+            document.querySelectorAll('.blending-active, .blending-all-highlight').forEach(el => {
+                el.classList.remove('blending-active', 'blending-all-highlight');
+            });
+        }
+        activeBlendingChips = [chipElement];
+        chipElement.classList.add('blending-active');
+    }
+
+    playChunkAudio(wordObj.chunks[chunkIdx], () => {
+        if (chipElement) {
+            chipElement.classList.remove('blending-active');
+        }
+    });
+}
+
+function onBlendButtonClick(wordText, btnElement) {
+    const wordObj = getWordObjByText(wordText);
+    if (!wordObj) return;
+    const container = btnElement ? btnElement.closest('.study-card') : null;
+    soundItOutBlending(wordObj, container);
+}
+
 function generateStudyCardHTML(word) {
-    const stats = userProgress[word.word.toLowerCase()] || { correct: 0, incorrect: 0 };
-    let segHtml = word.segments.map((s, i) => {
-        let color = segmentColors[i % segmentColors.length];
-        return `<span style="color: ${color}">${s}</span>`;
-    }).join(' - ');
+    if (!word) return '';
+    const stats = (typeof userProgress !== 'undefined' && userProgress[word.word.toLowerCase()])
+        || { correct: 0, incorrect: 0 };
+
+    const chunkType = word.chunkType || 'syllable';
+    const typeLabel = CHUNK_TYPE_LABELS[chunkType] || '音節拆分';
+
+    const chunks = Array.isArray(word.chunks) && word.chunks.length > 0
+        ? word.chunks
+        : (word.segments || [word.word]).map(s => ({ text: s, ipa: '', roleTag: 'syllable', speakAs: s }));
+
+    const chunksHtml = chunks.map((c, i) => {
+        const roleTag = c.roleTag || 'syllable';
+        const cleanIpa = String(c.ipa || '').replace(/^\/+|\/+$/g, '').trim();
+        const ipaText = cleanIpa ? `/${cleanIpa}/` : '';
+        return `<button type="button" class="chunk-chip chip-role-${roleTag} chip-color-${i % 5}" data-chunk-idx="${i}" data-word="${word.word}" onclick="onChunkChipClick('${word.word}', ${i}, this)" title="點擊聆聽分塊「${c.text}」">
+            <span class="chunk-text">${c.text}</span>
+            <span class="chunk-ipa">${ipaText}</span>
+        </button>`;
+    }).join('');
+
+    let anchorHtml = '';
+    if (word.anchor) {
+        let anchorContent = `🧲 記憶錨點: <span class="anchor-value">${word.anchor}</span>`;
+        if (Array.isArray(word.siblings) && word.siblings.length > 0) {
+            anchorContent += ` <span class="anchor-siblings">(同族字: ${word.siblings.join(', ')})</span>`;
+        }
+        anchorHtml = `<div class="anchor-badge">${anchorContent}</div>`;
+    }
+
+    const noteText = word.uiNote || word.mnemonic || '';
+    const meaningText = word.meaning || '';
+    const ipaDisplay = word.ipa ? `<span class="study-full-ipa">${word.ipa}</span>` : '';
 
     return `
-    <div class="study-card">
+    <div class="study-card" data-word="${word.word}">
         <div class="study-card-top">
-            <div class="study-emoji">${word.emoji}</div>
+            <div class="study-emoji">${word.emoji || '📖'}</div>
             <div class="study-word-info">
-                <div class="study-segments">${segHtml}</div>
-                <div class="study-actual">#${word.id} · ${word.word}</div>
+                <div class="study-header-tags">
+                    <span class="type-badge badge-${chunkType}">${typeLabel}</span>
+                    <span class="study-actual">#${word.id} · ${word.word}</span>
+                    ${ipaDisplay}
+                </div>
+                <div class="study-chunk-bar">
+                    ${chunksHtml}
+                    <button type="button" class="btn-blend-sound" onclick="onBlendButtonClick('${word.word}', this)" title="自然拼讀連讀合成">
+                        🔗 拼讀
+                    </button>
+                </div>
                 <div class="word-stats">
                     <span class="stat-correct">✔️ 答對: ${stats.correct} 次</span>
                     <span class="stat-incorrect">❌ 答錯: ${stats.incorrect} 次</span>
                 </div>
             </div>
-            <button class="study-audio-btn" onclick="speakWord('${word.word}')">🔊</button>
+            <button class="study-audio-btn" onclick="speakWord('${word.word}')" title="朗讀整字">🔊</button>
         </div>
+        ${anchorHtml}
         <div class="study-bottom">
-            <div class="study-meaning">${word.meaning}</div>
-            <div class="study-mnemonic">💡 ${word.mnemonic}</div>
+            <div class="study-meaning">${meaningText}</div>
+            <div class="study-mnemonic">💡 ${noteText}</div>
         </div>
     </div>
     `;
@@ -1167,6 +1535,7 @@ let spellingPlayId = 0;
 let spellingTimer = null;
 
 function cancelAllSpeech() {
+    stopBlending();
     spellingPlayId++;
     if (spellingTimer) {
         clearTimeout(spellingTimer);
@@ -1198,14 +1567,33 @@ function setSingleLetterHighlight(index) {
     });
 }
 
-function renderFeedbackLetterRow(wordText) {
-    const row = document.getElementById('feedback-letters-row');
-    if (!row) return;
+function getWordLengthTier(wordText) {
+    const chars = String(wordText || '').trim().split('');
+    const len = chars.length;
+    if (len <= 4) return 'letter-len-short';
+    if (len <= 6) return 'letter-len-medium';
+    return 'letter-len-long';
+}
+
+function renderFeedbackLetterRow(wordText, targetElement = null) {
+    const row = targetElement || (typeof document !== 'undefined' ? document.getElementById('feedback-letters-row') : null);
     const chars = String(wordText || '').split('');
-    row.innerHTML = chars.map((ch, idx) => {
+    const lenClass = getWordLengthTier(wordText);
+
+    if (row && row.classList && typeof row.classList.remove === 'function') {
+        row.classList.remove('letter-len-short', 'letter-len-medium', 'letter-len-long');
+        row.classList.add(lenClass);
+    }
+
+    const html = chars.map((ch, idx) => {
         const dash = idx < chars.length - 1 ? `<span class="spell-dash">-</span>` : '';
-        return `<span class="spell-letter-box" id="spell-letter-${idx}">${ch.toLowerCase()}</span>${dash}`;
+        return `<span class="spell-letter-box ${lenClass}" id="spell-letter-${idx}">${ch.toLowerCase()}</span>${dash}`;
     }).join('');
+
+    if (row) {
+        row.innerHTML = html;
+    }
+    return { lenClass, html };
 }
 
 function getLetterUtteranceText(ch) {
@@ -1388,12 +1776,31 @@ function abortQuiz() {
 }
 
 // ================= UTILS =================
-function speakWord(text) {
-    if (!window.speechSynthesis) return;
-    cancelAllSpeech();
+function speakWord(text, onEnded = null, isBlendingStep = false) {
+    if (!isBlendingStep) {
+        stopBlending();
+    }
+    stopCurrentChunkAudio();
+    if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+    }
+    if (!window.speechSynthesis) {
+        if (typeof onEnded === 'function') onEnded();
+        return;
+    }
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'en-US';
-    u.rate = storySpeedMode === 'normal' ? 0.85 : 0.5;
+    u.rate = (typeof storySpeedMode !== 'undefined' && storySpeedMode === 'normal') ? 0.85 : 0.5;
+    let fired = false;
+    const finish = () => {
+        if (!fired) {
+            fired = true;
+            if (typeof onEnded === 'function') onEnded();
+        }
+    };
+    u.onend = finish;
+    u.onerror = finish;
+    setTimeout(finish, 2200);
     window.speechSynthesis.speak(u);
 }
 
@@ -1417,4 +1824,26 @@ if (window.speechSynthesis) {
     window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
 }
 
-init();
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('level-grid')) {
+    init();
+}
+
+
+// Node.js module exports for automated testing
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        getChunkAudioKey,
+        playChunkAudio,
+        soundItOutBlending,
+        stopBlending,
+        generateStudyCardHTML,
+        renderFeedbackLetterRow,
+        getWordLengthTier,
+        cancelAllSpeech,
+        speakWord,
+        onChunkChipClick,
+        onBlendButtonClick,
+        getWordObjByText,
+        CHUNK_TYPE_LABELS
+    };
+}

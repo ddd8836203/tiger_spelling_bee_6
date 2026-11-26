@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Spelling Bee 終極特訓</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20261126_2">
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -35,6 +35,7 @@
                     <span class="cloud-dot" id="cloud-status-dot"></span>
                     <span id="cloud-status-text">雲端</span>
                 </button>
+                <button type="button" class="cloud-status-btn" id="nav-export" onclick="openAiExportModal()" title="匯出錯題給 AI (Gemini Canvas)">📤 AI</button>
 
                 <!-- 使用者快速切換按鈕 -->
                 <button type="button" class="nav-user-btn" id="btn-nav-user" onclick="openUserModal()" title="切換使用人員 / 雲端設定">
@@ -290,7 +291,9 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
-    <script src="data.js"></script>
-    <script src="app.js"></script>
+    <script src="data.js?v=20261126_2"></script>
+    <script src="data/chunk_audio_map.js?v=20261126_2"></script>
+    <script src="ai_export_core.js?v=20261126_2"></script>
+    <script src="app.js?v=20261126_2"></script>
 </body>
 </html>
